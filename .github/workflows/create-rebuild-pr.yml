@@ -1,0 +1,48 @@
+name: Create Rebuild PR
+
+on:
+  workflow_dispatch:
+    inputs:
+      formulas:
+        description: '要 rebuild 的 Formula 名称，多个用空格或逗号分隔（如 "avro-tools dolt ffmpeg"）'
+        required: true
+        type: string
+
+jobs:
+  # 1. 把输入的字符串解析成 JSON 数组，供 matrix 使用
+  prepare-matrix:
+    runs-on: ubuntu-24.04-arm
+    outputs:
+      matrix: ${{ steps.parse.outputs.matrix }}
+    steps:
+      - name: Parse formulas into matrix
+        id: parse
+        env:
+          FORMULAS: ${{ inputs.formulas }}
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os, re
+          items = [x for x in re.split(r"[,\s]+", os.environ["FORMULAS"].strip()) if x]
+          print("matrix=" + json.dumps(items))
+          PY
+
+  # 2. 用 matrix 并行 rebuild 每个 formula
+  rebuild:
+    needs: prepare-matrix
+    runs-on: ubuntu-24.04-arm
+    strategy:
+      fail-fast: false
+      matrix:
+        formula: ${{ fromJSON(needs.prepare-matrix.outputs.matrix) }}
+    steps:
+      # 检出代码（含 create-rebuild-pr.py 与 create-rebuild-pr.sh）
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      # 调用本地脚本：内部完成 docker pull + 容器执行 rebuild
+      - name: "Create rebuild PR: ${{ matrix.formula }}"
+        env:
+          ATOMGIT_TOKEN: ${{ secrets.ATOMGIT_TOKEN }}
+          ATOMGIT_USER: ${{ secrets.ATOMGIT_USER }}
+          ATOMGIT_EMAIL: ${{ secrets.ATOMGIT_EMAIL }}
+        run: ./create-rebuild-pr.sh "${{ matrix.formula }}"
